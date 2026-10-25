@@ -3,7 +3,7 @@
 <package format="3">
   <name>vehicle_control</name>
   <version>0.0.0</version>
-  <description>Distance-driving controller for a differential-drive vehicle in Gazebo Fortress (P-control deceleration, fail-safe stop)</description>
+  <description>Differential-drive vehicle in Gazebo Fortress: distance-driving P controller, and a camera perception pipeline (YOLO detection, monocular ground-plane distance estimation, obstacle stop)</description>
   <maintainer email="pg08100830@gmail.com">ParkGyeom</maintainer>
   <license>MIT</license>
 
@@ -12,8 +12,13 @@
   <depend>rclcpp</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>vision_msgs</depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
   <exec_depend>ros_gz_bridge</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <!-- ultralytics(YOLO)는 rosdep 키가 없어 pip으로 따로 설치 (README 참고) -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
