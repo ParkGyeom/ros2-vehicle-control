@@ -74,7 +74,7 @@ ros2 launch vehicle_control perception.launch.py drive:=true
 | `detector` | `yolo` | `red_box`: 검증용 빨간 상자 검출기 |
 | `odom_prediction` | `true` | 지연 보상 on/off (비교 실험용) |
 
-`obstacle_stop` 주요 파라미터: `stop_distance`(3.0 m), `camera_height`(0.7 m), `lane_half_width`(1.2 m), `kp`(0.5), `cruise_speed`(0.5 m/s), `detection_timeout`(1.5 s), `clear_frames`(3), `resume_margin`(0.3 m). 실수 파라미터는 `3.0`처럼 소수점을 붙여서 넘깁니다.
+`obstacle_stop` 주요 파라미터: `stop_distance`(3.0 m), `camera_height`(0.7 m), `lane_half_width`(1.2 m), `kp`(0.5), `cruise_speed`(1.5 m/s, 최대 2.0), `detection_timeout`(1.5 s), `clear_frames`(3), `resume_margin`(0.3 m). 실수 파라미터는 `3.0`처럼 소수점을 붙여서 넘깁니다.
 
 ## 인식 파이프라인
 

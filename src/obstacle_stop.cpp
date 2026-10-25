@@ -33,7 +33,7 @@ class ObstacleStop : public rclcpp::Node {
   using CameraInfo = sensor_msgs::msg::CameraInfo;
   using Detections = vision_msgs::msg::Detection2DArray;
 
-  static constexpr double kRobotMaxSpeed = 0.5;  // diff_drive.sdf의 max_linear_velocity
+  static constexpr double kRobotMaxSpeed = 2.0;  // perception_road.sdf의 max_linear_velocity
   static constexpr double kInf = std::numeric_limits<double>::infinity();
 
 public:
@@ -46,7 +46,7 @@ public:
     lane_half_width_ = this->declare_parameter("lane_half_width", 1.2);  // 차폭 1.85m의 절반 + 여유
     stop_distance_   = this->declare_parameter("stop_distance", 3.0);    // 카메라(앞 범퍼)~장애물 목표 간격
     resume_margin_   = this->declare_parameter("resume_margin", 0.3);    // 정지 후 재출발 히스테리시스
-    cruise_speed_    = this->declare_parameter("cruise_speed", 0.5);
+    cruise_speed_    = this->declare_parameter("cruise_speed", 1.5);      // 장애물 없을 때 속도 (m/s)
     min_speed_       = this->declare_parameter("min_speed", 0.05);
     kp_              = this->declare_parameter("kp", 0.5);
     tolerance_       = this->declare_parameter("tolerance", 0.05);
