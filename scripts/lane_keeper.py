@@ -49,6 +49,7 @@ class LaneKeeper(Node):
         self.speed = self.declare_parameter('speed', 1.0).value          # m/s
         self.lookahead = self.declare_parameter('lookahead', 7.0).value  # 앞 몇 m를 볼지
         self.max_travel = self.declare_parameter('max_travel', 20.0).value
+        self.image_timeout = self.declare_parameter('image_timeout', 2.0).value  # VM은 카메라가 느려서 여유
 
         self.create_subscription(Image, '/front_camera/image', self.on_image,
                                  qos_profile_sensor_data)
@@ -151,8 +152,8 @@ class LaneKeeper(Node):
         self.debug_pub.publish(out)
 
     def watchdog(self):
-        if not self.done and time.monotonic() - self.last_image > 1.0:
-            self.stop('카메라 영상이 1초 넘게 안 옴')
+        if not self.done and time.monotonic() - self.last_image > self.image_timeout:
+            self.stop(f'카메라 영상이 {self.image_timeout:.0f}초 넘게 안 옴')
 
     def stop(self, why):
         for _ in range(3):

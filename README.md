@@ -145,7 +145,7 @@ ros2 run vehicle_control lane_keeper.py --ros-args -p lookahead:=7.0 -p speed:=1
 ros2 run rqt_image_view rqt_image_view /lane/debug
 ```
 
-파라미터: `speed`(m/s), `lookahead`(m, 6~9 권장), `max_travel`(m)
+파라미터: `speed`(m/s), `lookahead`(m, 6~9 권장), `max_travel`(m), `image_timeout`(s, 카메라가 이만큼 끊기면 정지)
 
 ## 개발 기록
 
