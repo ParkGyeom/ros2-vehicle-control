@@ -17,6 +17,7 @@ ROS2 Humble + Gazebo Fortress 환경에서 차동구동 차량(`vehicle_blue`)�
 | `src/obstacle_stop.cpp` | 검출 결과 → 단안 거리 추정·차선 필터 → 장애물 앞 P제어 정지 |
 | `scripts/yolo_detector.py` | 카메라 이미지 → YOLO 검출 → `vision_msgs/Detection2DArray` 발행 |
 | `scripts/red_box_detector.py` | 검증용: 빨간 상자를 검출하는 가짜 인식 노드 (정답 거리 실험용) |
+| `scripts/lane_keeper.py` | 차선 색 추출 → bird's-eye → 차선 중앙 → Pure Pursuit 조향 |
 | `launch/sim.launch.py` | Gazebo + ROS↔Gazebo 브리지 실행 |
 | `launch/perception.launch.py` | 인식 데모: Gazebo + 브리지(카메라 포함) + 검출 + 정지 노드 + 결과 영상 창 |
 | `worlds/diff_drive.sdf` | Fortress 데모 월드 수정본 (오도메트리 1Hz → 50Hz) |
@@ -123,6 +124,28 @@ ros2 launch vehicle_control perception.launch.py world:=distance_test.sdf detect
 ros2 topic echo --once /model/vehicle_blue/odometry | grep -A1 "position:"
 ```
 상자 앞면은 x=9.5, 카메라는 차량 원점보다 0.899 m 앞에 있습니다 (차체 오프셋 −0.151 + 카메라 1.05).
+
+## 차선 유지 (`scripts/lane_keeper.py`)
+
+카메라 영상만으로 차선 중앙을 찾아 조향합니다.
+1. **차선 색 추출 (HSV)**: 흰 선은 밝기 V ≥ 150 + 채도 S ≤ 30, 노란 선은 색상 H 20~35 + S ≥ 80
+2. **bird's-eye 변환**: 앞 5~20 m, 좌우 ±3 m 바닥을 1 m = 50 px로 폅니다. 사다리꼴 꼭짓점은 거리 추정과 같은 핀홀 공식 `u = cx + fx·X/Z, v = cy + fy·h/Z`로 계산
+3. **차선 중앙**: 앞 `lookahead` m ± 1 m 띠에서 세로 줄마다 흰 픽셀 수를 세어 왼쪽·오른쪽 차선 위치를 찾고, 한쪽만 보이면 차선 폭 3 m로 추정
+4. **Pure Pursuit 조향**: 목표점(앞 L, 옆 −lat)을 지나는 원의 곡률 `2·sin(α) / 거리`에 속도를 곱해 각속도로 보냄
+
+```bash
+# 터미널 1: 시뮬 (YOLO 없이)
+ros2 launch vehicle_control perception.launch.py detector:=none image_view:=false
+# 터미널 2: 주차된 차를 옆 차선으로 치우고, 내 차를 왼쪽 0.5 m + 5.7° 틀어 놓기
+ign service -s /world/perception_road/set_pose --reqtype ignition.msgs.Pose --reptype ignition.msgs.Boolean --timeout 2000 --req 'name: "parked_car", position: {x: 15, y: -2.5, z: 0}'
+ign service -s /world/perception_road/set_pose --reqtype ignition.msgs.Pose --reptype ignition.msgs.Boolean --timeout 2000 --req 'name: "vehicle_blue", position: {x: 0, y: 2.5, z: 0.325}, orientation: {z: 0.05, w: 0.9987}'
+# 차선 유지 시작 (20 m 달리고 정지)
+ros2 run vehicle_control lane_keeper.py --ros-args -p lookahead:=7.0 -p speed:=1.0
+# 터미널 3: 차선 인식 화면 (초록 = 찾은 차선, 빨강 = 목표점)
+ros2 run rqt_image_view rqt_image_view /lane/debug
+```
+
+파라미터: `speed`(m/s), `lookahead`(m, 6~9 권장), `max_travel`(m)
 
 ## 개발 기록
 

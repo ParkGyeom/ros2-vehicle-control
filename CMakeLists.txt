@@ -31,6 +31,7 @@ install(TARGETS
 install(PROGRAMS
   scripts/yolo_detector.py
   scripts/red_box_detector.py
+  scripts/lane_keeper.py
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch worlds
