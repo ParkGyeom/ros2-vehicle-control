@@ -1,22 +1,32 @@
 # ros2-vehicle-control
 
-ROS2 Humble + Gazebo Fortress 환경에서 차동구동 차량(`vehicle_blue`)을 C++ 노드로 제어하는 패키지입니다.
-오도메트리 기반 거리 주행, P제어 감속 정지, 안전 정지(fail-safe)를 구현했습니다.
+ROS2 Humble + Gazebo Fortress 환경에서 차동구동 차량(`vehicle_blue`)을 제어하는 패키지입니다.
+- **제어**: 오도메트리 기반 거리 주행, P제어 감속 정지, 안전 정지(fail-safe)
+- **인식**: 전방 카메라 → YOLO 객체 검출 → 단안 거리 추정 → 내 차선의 장애물 앞에서 감속·정지
 
 ## 환경
 - Ubuntu 22.04 (arm64, UTM VM on Apple Silicon)
-- ROS2 Humble, Ignition Gazebo Fortress, ros_gz_bridge
-- C++17 (rclcpp)
+- ROS2 Humble, Ignition Gazebo Fortress, ros_gz_bridge, vision_msgs
+- C++17 (rclcpp), Python 3 (rclpy, Ultralytics YOLO26n, CPU 추론)
 
 ## 구성
 | 파일 | 설명 |
 |---|---|
 | `src/circle_driver.cpp` | 타이머로 Twist를 발행해 원 주행, Ctrl+C 시 정지 명령 후 종료 |
 | `src/drive_distance.cpp` | 오도메트리 구독 → 목표 거리까지 P제어 감속 주행 후 정지 |
+| `src/obstacle_stop.cpp` | 검출 결과 → 단안 거리 추정·차선 필터 → 장애물 앞 P제어 정지 |
+| `scripts/yolo_detector.py` | 카메라 이미지 → YOLO 검출 → `vision_msgs/Detection2DArray` 발행 |
+| `scripts/red_box_detector.py` | 검증용: 빨간 상자를 검출하는 가짜 인식 노드 (정답 거리 실험용) |
+| `scripts/lane_keeper.py` | 차선 색 추출 → bird's-eye → 차선 중앙 → Pure Pursuit 조향 |
 | `launch/sim.launch.py` | Gazebo + ROS↔Gazebo 브리지 실행 |
+| `launch/perception.launch.py` | 인식 데모: Gazebo + 브리지(카메라 포함) + 검출 + 정지 노드 + 결과 영상 창 |
 | `worlds/diff_drive.sdf` | Fortress 데모 월드 수정본 (오도메트리 1Hz → 50Hz) |
+| `worlds/perception_road.sdf` | 도로·차선 + 전방 카메라 + 주차된 차·보행자 (Gazebo Fuel 모델) |
+| `worlds/distance_test.sdf` | 거리 검증용: 정답 위치를 아는 빨간 상자 (인터넷 불필요) |
 
 ## 실행
+
+### 1. 거리 주행
 ```bash
 cd ~/ros2_ws/src && git clone git@github.com:ParkGyeom/ros2-vehicle-control.git vehicle_control
 cd ~/ros2_ws && colcon build --packages-select vehicle_control --symlink-install
@@ -29,6 +39,113 @@ ros2 run vehicle_control drive_distance --ros-args -p target_distance:=2.0 -p kp
 ```
 
 파라미터: `target_distance`(m), `max_speed`(m/s, 로봇 한계 0.5로 clamp), `min_speed`, `kp`, `tolerance`
+
+### 2. 인식 → 장애물 정지
+```bash
+# 의존성 (한 번만)
+sudo apt install ros-humble-vision-msgs ros-humble-rqt-image-view python3-pip
+pip3 install --user ultralytics "numpy<2"
+
+cd ~/ros2_ws && colcon build --packages-select vehicle_control --symlink-install
+source install/setup.bash
+ros2 launch vehicle_control perception.launch.py drive:=true
+```
+- `numpy<2`: Humble의 파이썬 메시지 모듈이 numpy 1.x로 빌드돼 있어, pip이 numpy 2를 깔면 메시지 import가 깨집니다.
+- 처음 실행할 때는 Gazebo Fuel에서 차·보행자 모델을, Ultralytics가 YOLO 가중치를 내려받느라 시간이 걸립니다.
+
+시나리오 (`perception_road.sdf`, 내 차선 중심 y=2):
+1. 인도 위 보행자는 검출되지만 차선 밖이라 무시하고 주행
+2. 내 차선에 주차된 차 앞 3 m에서 감속·정지 (HOLD)
+3. 차를 옆 차선으로 치우면 다시 출발
+   ```bash
+   ign service -s /world/perception_road/set_pose \
+     --reqtype ignition.msgs.Pose --reptype ignition.msgs.Boolean --timeout 2000 \
+     --req 'name: "parked_car", position: {x: 15, y: -2.5, z: 0}'
+   ```
+4. 차선 안에 서 있는 보행자 앞에서 다시 정지
+
+| launch 인자 | 기본값 | 설명 |
+|---|---|---|
+| `drive` | `false` | `true`면 `obstacle_stop` 실행 (차가 움직임) |
+| `gui` | `true` | `false`면 Gazebo 창 없이 실행 → VM에서 카메라 FPS 상승 |
+| `imgsz` | `640` | YOLO 입력 해상도, 느리면 `320` |
+| `model` | `yolo26n.pt` | YOLO 가중치 |
+| `image_view` | `true` | 박스를 그린 결과 영상 창 (`/perception/image_annotated`) |
+| `world` | `perception_road.sdf` | `worlds/` 안의 파일 이름 또는 절대 경로 |
+| `detector` | `yolo` | `red_box`: 검증용 빨간 상자 검출기 |
+| `odom_prediction` | `true` | 지연 보상 on/off (비교 실험용) |
+
+`obstacle_stop` 주요 파라미터: `stop_distance`(3.0 m), `camera_height`(0.7 m), `lane_half_width`(1.2 m), `kp`(0.5), `cruise_speed`(1.5 m/s, 최대 2.0), `detection_timeout`(1.5 s), `clear_frames`(3), `resume_margin`(0.3 m). 실수 파라미터는 `3.0`처럼 소수점을 붙여서 넘깁니다.
+
+## 인식 파이프라인
+
+```mermaid
+flowchart LR
+  CAM["Gazebo 전방 카메라<br/>640x480, HFOV 60°"] -->|/front_camera/image| YOLO["yolo_detector.py<br/>YOLO26n (CPU)"]
+  YOLO -->|/perception/detections<br/>Detection2DArray| STOP["obstacle_stop<br/>(C++)"]
+  CAM -->|/front_camera/camera_info| STOP
+  ODOM["오도메트리 50Hz"] --> STOP
+  STOP -->|/model/vehicle_blue/cmd_vel| CAR["vehicle_blue"]
+```
+
+### 단안 거리 추정 (ground-plane)
+카메라가 바닥에서 높이 `h`에 수평으로 달려 있고 바닥이 평평하다고 가정하면, 바닥 위의 점이 이미지의 `v`행에 보일 때
+```
+전방 거리 Z = fy · h / (v − cy)
+좌우 위치 X = (u − cx) · Z / fx
+```
+물체가 바닥에 닿는 곳은 검출 박스의 **아랫변**이므로, 아랫변으로 거리와 좌우 위치를 구합니다. `fx, fy, cx, cy`는 `camera_info`의 K 행렬에서 읽습니다.
+- 박스 아랫변이 지평선(`cy`) 위 → 바닥 접점이 안 보이므로 거리 계산에서 제외
+- 박스가 이미지 아래로 잘림 → 실제로는 추정보다 가까우므로 거리 0(즉시 정지)으로 처리
+- 가정이 깨지는 경우: 경사로, 차체 피치(가감속), 바닥에 닿지 않은 물체
+
+### 차선 필터
+박스 아랫변 양 끝의 좌우 위치 `[X_left, X_right]`가 내 진행 폭(±`lane_half_width`)과 겹칠 때만 장애물로 봅니다. 그중 가장 가까운 것 하나로 속도를 정합니다.
+
+### 인식 지연 보상
+YOLO 결과는 이미지를 찍은 뒤 수백 ms 늦게 도착하므로, 그동안 차가 이동한 만큼 실제 거리는 더 짧습니다.
+오도메트리의 (sim 시각, 누적 주행거리)를 기록해 두고 `지금 거리 = 측정 거리 − (현재 누적거리 − 촬영 시각의 누적거리)`로 보정합니다. 다음 검출이 올 때까지의 프레임 사이 이동도 같은 방식으로 메웁니다.
+
+### 안전 장치
+- `detection_timeout` 동안 검출 메시지가 없으면 FAILSAFE 정지 (검출 0개여도 메시지는 계속 오므로 "인식 노드가 살아 있음"을 구분 가능)
+- 장애물이 사라져도 `clear_frames` 연속 프레임 동안 비어 있어야 출발 (한 프레임 미검출 대비)
+- 한번 HOLD하면 `resume_margin` 이상 멀어져야 재출발 (거리 잡음으로 들썩이지 않게)
+- `max_travel` 이상 주행하면 정지, Ctrl+C 시 정지 명령 후 종료
+
+### 검증 방법
+YOLO 박스는 물체마다 조금씩 어긋나므로, 거리 공식과 지연 보상은 정답 위치를 아는 빨간 상자로 따로 확인합니다.
+```bash
+# 지연 없이 / 인식 지연 0.5초를 흉내 내고 보상 off / on
+ros2 launch vehicle_control perception.launch.py world:=distance_test.sdf detector:=red_box drive:=true image_view:=false
+ros2 launch vehicle_control perception.launch.py world:=distance_test.sdf detector:=red_box drive:=true image_view:=false delay:=0.5 odom_prediction:=false
+ros2 launch vehicle_control perception.launch.py world:=distance_test.sdf detector:=red_box drive:=true image_view:=false delay:=0.5 odom_prediction:=true
+
+# 정지(HOLD) 후 실제 간격 = 9.5 − (오도메트리 x + 0.899)
+ros2 topic echo --once /model/vehicle_blue/odometry | grep -A1 "position:"
+```
+상자 앞면은 x=9.5, 카메라는 차량 원점보다 0.899 m 앞에 있습니다 (차체 오프셋 −0.151 + 카메라 1.05).
+
+## 차선 유지 (`scripts/lane_keeper.py`)
+
+카메라 영상만으로 차선 중앙을 찾아 조향합니다.
+1. **차선 색 추출 (HSV)**: 흰 선은 밝기 V ≥ 150 + 채도 S ≤ 30, 노란 선은 색상 H 20~35 + S ≥ 80
+2. **bird's-eye 변환**: 앞 5~20 m, 좌우 ±3 m 바닥을 1 m = 50 px로 폅니다. 사다리꼴 꼭짓점은 거리 추정과 같은 핀홀 공식 `u = cx + fx·X/Z, v = cy + fy·h/Z`로 계산
+3. **차선 중앙**: 앞 `lookahead` m ± 1 m 띠에서 세로 줄마다 흰 픽셀 수를 세어 왼쪽·오른쪽 차선 위치를 찾고, 한쪽만 보이면 차선 폭 3 m로 추정
+4. **Pure Pursuit 조향**: 목표점(앞 L, 옆 −lat)을 지나는 원의 곡률 `2·sin(α) / 거리`에 속도를 곱해 각속도로 보냄
+
+```bash
+# 터미널 1: 시뮬 (YOLO 없이)
+ros2 launch vehicle_control perception.launch.py detector:=none image_view:=false
+# 터미널 2: 주차된 차를 옆 차선으로 치우고, 내 차를 왼쪽 0.5 m + 5.7° 틀어 놓기
+ign service -s /world/perception_road/set_pose --reqtype ignition.msgs.Pose --reptype ignition.msgs.Boolean --timeout 2000 --req 'name: "parked_car", position: {x: 15, y: -2.5, z: 0}'
+ign service -s /world/perception_road/set_pose --reqtype ignition.msgs.Pose --reptype ignition.msgs.Boolean --timeout 2000 --req 'name: "vehicle_blue", position: {x: 0, y: 2.5, z: 0.325}, orientation: {z: 0.05, w: 0.9987}'
+# 차선 유지 시작 (20 m 달리고 정지)
+ros2 run vehicle_control lane_keeper.py --ros-args -p lookahead:=7.0 -p speed:=1.0
+# 터미널 3: 차선 인식 화면 (초록 = 찾은 차선, 빨강 = 목표점)
+ros2 run rqt_image_view rqt_image_view /lane/debug
+```
+
+파라미터: `speed`(m/s), `lookahead`(m, 6~9 권장), `max_travel`(m), `image_timeout`(s, 카메라가 이만큼 끊기면 정지)
 
 ## 개발 기록
 
@@ -55,6 +172,24 @@ P제어의 감속도는 `kp × v`이므로, 최고 속도 0.5 m/s에서 가속�
 ### 3. Ctrl+C 시 차량이 멈추지 않음 → 안전 정지
 - 원인: 기본 시그널 처리에서는 ROS2 컨텍스트가 먼저 종료돼 정지 명령을 보낼 수 없음
 - 해결: `SignalHandlerOptions::None` + 직접 SIGINT 처리 + `spin_some` 루프로 "정지 명령 전송 → shutdown" 순서 보장
+
+### 4. 차선 인식 검증: 0.5 m 옮기면 0.53 m로 인식
+- 방법: 차선 한가운데에서 `lane_mask.py`로 오프셋 측정 → `set_pose`로 차를 왼쪽 0.5 m 이동 → 다시 측정
+- 결과: 차선 폭 3.00 m / 오프셋 +0.00 m → 차선 폭 3.02 m / 오프셋 **+0.53 m** (오차 3 cm)
+
+### 5. 차선 유지 lookahead 실험: 인식 거리가 제어의 한계를 정함
+- 조건: 차선 중앙에서 왼쪽 0.5 m, 5.7° 틀어진 채 출발, 1.0 m/s로 20 m 주행 후 Gazebo 실제 위치로 오차 측정
+
+| lookahead | 20 m 주행 후 오차 | 관찰 |
+|---|---|---|
+| 6 m | −0.008 m | 가장 빨리 수렴 |
+| 7 m | −0.004 m | 빠르고 지나침 없음 (기본값) |
+| 9 m | +0.102 m | 부드럽지만 20 m 안에 수렴 못 함 |
+| 12 m | 출발 못 함 | "차선 안 보임" |
+
+- lookahead가 길수록 목표점을 지나는 원이 커져 조향이 약해짐 → 부드럽지만 느림
+- 12 m에서 실패한 이유: 먼 바닥일수록 사진에서 차지하는 줄 수가 급격히 줄어듦. 6~8 m 구간은 약 16줄, 11~13 m 구간은 약 5줄 (`fy·h·(1/Z₁ − 1/Z₂)`). bird's-eye로 펴면 선이 뭉개지고 끊겨 흰 픽셀 수가 기준(20)에 못 미침
+- 결론: 기본값 7 m. 더 멀리 보려면 카메라 해상도를 높이거나, 선을 세로로 이어 붙이는 처리(모폴로지)가 필요
 
 ## License
 MIT
